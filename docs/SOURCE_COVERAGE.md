@@ -116,13 +116,15 @@ from the 2026-05-10 source-intake review:
 - **AI newsletters**: AI For Developers, True Positive Weekly, AI Evaluation,
   and BuzzRobot.
 
-These entries are examples for maintainers who copy the file to
-`feeds/follow.opml`; they do **not** change the public default source list by
-themselves. QbitAI remains on the watchlist because the direct feed probed via
-`urllib` but returned `403 Forbidden` through the project fetch path. Broad
-sources such as TechCrunch, Hacker News frontpage, general hot lists, X bridges,
-and WeChat bridges remain outside the example file unless the maintainer
-explicitly accepts the extra filtering and maintenance risk.
+In GitHub Actions, `feeds/follow.example.opml` is also used as the public demo
+fallback when no private `FOLLOW_OPML_B64` secret is configured. This keeps the
+hosted page visibly proving that RSS/OPML import works without requiring any
+private subscriptions. Maintainers can override it by setting `FOLLOW_OPML_B64`.
+QbitAI remains on the watchlist because the direct feed probed via `urllib` but
+returned `403 Forbidden` through the project fetch path. Broad sources such as
+TechCrunch, Hacker News frontpage, general hot lists, X bridges, and WeChat
+bridges remain outside the example file unless the maintainer explicitly accepts
+the extra filtering and maintenance risk.
 
 ## Personal Source Workflow
 

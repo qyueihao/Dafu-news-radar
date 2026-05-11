@@ -147,7 +147,7 @@ function renderCoverageStrip(errorMessage = "") {
   const totalSites = rows.length;
   const okSites = Number(state.sourceStatus?.successful_sites || 0);
   const opmlValue = rss.enabled ? `${fmtNumber(rss.ok_feeds || 0)}/${fmtNumber(rss.effective_feed_total || 0)}` : "OPML";
-  const opmlMeta = rss.enabled ? "私有订阅已接入" : "可用 Secret 接入私有源";
+  const opmlMeta = rss.enabled ? "RSS示例/自定义订阅已接入" : "可用OPML批量接入RSS";
   const xApiLabel = xApi.enabled ? `X ${xApi.skipped ? "待窗口" : fmtNumber(xApi.item_count || 0)}` : "X待配置";
   const mailLabel = agentmail.enabled ? `Mail ${fmtNumber(agentmail.item_count || 0)}` : "Mail待配置";
   const advancedMeta = xApi.enabled || agentmail.enabled
@@ -160,7 +160,7 @@ function renderCoverageStrip(errorMessage = "") {
     ["AI精选", `${fmtNumber(state.totalAi)} 条`, "24小时强相关信号", "signal"],
     ["官方/日报源池", `${fmtNumber(officialCount + newsletterCount)} 条`, "官方节点 + AI Breakfast", "official"],
     ["Builders/X源池", `${fmtNumber(buildersCount)} 条`, "Follow Builders公开feed", "builders"],
-    ["私人扩展", opmlValue, opmlMeta, "private"],
+    ["RSS/OPML扩展", opmlValue, opmlMeta, "private"],
     ["高级源", "X / Mail", advancedMeta, "private"],
   ];
 

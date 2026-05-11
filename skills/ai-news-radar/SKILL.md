@@ -96,7 +96,10 @@ python scripts/update_news.py --output-dir data --window-hours 24 --rss-opml fee
 ```
 
 For GitHub Actions deployment, base64 encode `feeds/follow.opml` and save it as
-the repository secret `FOLLOW_OPML_B64`. Do not commit the private OPML file.
+the repository secret `FOLLOW_OPML_B64` to override the public demo OPML. If the
+secret is not configured, the workflow uses `feeds/follow.example.opml` as a
+small public RSS/OPML demo so the hosted page shows the OPML path working. Do not
+commit the private OPML file.
 For AgentMail, use `EMAIL_DIGEST_ENABLED=1`, `AGENTMAIL_API_KEY`, and
 `AGENTMAIL_INBOX_ID` only in environment variables or GitHub Secrets. Keep
 `EMAIL_DIGEST_PUBLISH` unset unless the maintainer explicitly wants a private

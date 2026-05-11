@@ -149,7 +149,8 @@ When a new agent takes over validation, read these first:
 
 - Runs every 30 minutes by default
 - Automatically generates and commits `data/*.json`
-- Decodes `FOLLOW_OPML_B64` into `feeds/follow.opml` when configured
+- Uses public demo `feeds/follow.example.opml` when `FOLLOW_OPML_B64` is not configured, so the hosted page can show the RSS/OPML path working
+- Decodes `FOLLOW_OPML_B64` into private `feeds/follow.opml` when configured
 - Generates a redacted email summary when `EMAIL_DIGEST_ENABLED=1`, `AGENTMAIL_API_KEY`, and `AGENTMAIL_INBOX_ID` are set
 - Commits `data/email-digest.json` only when `EMAIL_DIGEST_PUBLISH=1` is also explicitly set
 - Uses the official X API during the configured daily UTC window when `X_API_ENABLED=1`, `X_BEARER_TOKEN`, and budget variables are set. This is off by default, and the current X API charges by returned resources.
