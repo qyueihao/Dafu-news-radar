@@ -27,6 +27,11 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 try:
+    from scripts.ai_relevance import add_ai_relevance_fields, score_ai_relevance
+except ModuleNotFoundError:  # pragma: no cover - direct `python scripts/update_news.py`
+    from ai_relevance import add_ai_relevance_fields, score_ai_relevance
+
+try:
     import feedparser
 except ModuleNotFoundError:
     feedparser = None
@@ -1932,6 +1937,140 @@ def resolve_official_rss_url(feed_url: str) -> tuple[str | None, str | None]:
     return src, None
 
 
+def resolve_opml_bridge_source(feed_url: str, html_url: str = "") -> dict[str, str] | None:
+    src = (feed_url or "").strip()
+    parsed = urlparse(src)
+    path = parsed.path.strip("/")
+    parts = [p for p in path.split("/") if p]
+
+    if parsed.netloc == "rsshub.app" and len(parts) >= 3 and parts[:2] == ["telegram", "channel"]:
+        slug = parts[2]
+        return {
+            "bridge_type": "telegram",
+            "bridge_slug": slug,
+            "url": f"https://t.me/s/{slug}",
+        }
+
+    if parsed.netloc == "rsshub.app" and len(parts) >= 3 and parts[0] == "jike":
+        kind = parts[1]
+        ident = parts[2]
+        if kind == "topic":
+            return {
+                "bridge_type": "jike",
+                "bridge_kind": "topic",
+                "bridge_slug": ident,
+                "url": f"https://m.okjike.com/topics/{ident}",
+            }
+        if kind == "user":
+            return {
+                "bridge_type": "jike",
+                "bridge_kind": "user",
+                "bridge_slug": ident,
+                "url": f"https://m.okjike.com/users/{ident}",
+            }
+
+    html = (html_url or "").strip()
+    if html.startswith("https://t.me/s/"):
+        slug = html.rstrip("/").split("/")[-1]
+        return {"bridge_type": "telegram", "bridge_slug": slug, "url": html}
+    if html.startswith("https://m.okjike.com/topics/"):
+        ident = html.rstrip("/").split("/")[-1]
+        return {"bridge_type": "jike", "bridge_kind": "topic", "bridge_slug": ident, "url": html}
+    if html.startswith("https://m.okjike.com/users/"):
+        ident = html.rstrip("/").split("/")[-1]
+        return {"bridge_type": "jike", "bridge_kind": "user", "bridge_slug": ident, "url": html}
+
+    return None
+
+
+def compact_title(text: str, limit: int = 96) -> str:
+    s = re.sub(r"\s+", " ", text or "").strip()
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1].rstrip() + "…"
+
+
+def parse_telegram_public_items(
+    html: str,
+    *,
+    now: datetime,
+    source_name: str,
+    slug: str,
+) -> list[RawItem]:
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[RawItem] = []
+    for msg in soup.select(".tgme_widget_message"):
+        data_post = str(msg.get("data-post") or "").strip()
+        if not data_post:
+            continue
+        text_node = msg.select_one(".tgme_widget_message_text")
+        text = text_node.get_text(" ", strip=True) if text_node else ""
+        if not text:
+            preview_title = msg.select_one(".tgme_widget_message_link_preview_title")
+            text = preview_title.get_text(" ", strip=True) if preview_title else ""
+        if not text:
+            continue
+        time_node = msg.select_one("time[datetime]")
+        published = parse_date_any(time_node.get("datetime") if time_node else None, now)
+        if not published:
+            continue
+        url = f"https://t.me/{data_post}"
+        out.append(
+            RawItem(
+                site_id="opmlrss",
+                site_name="OPML RSS",
+                source=source_name,
+                title=compact_title(text),
+                url=url,
+                published_at=published,
+                meta={"bridge_type": "telegram", "bridge_slug": slug, "feed_home": f"https://t.me/s/{slug}"},
+            )
+        )
+    return out
+
+
+def parse_jike_public_items(
+    html: str,
+    *,
+    now: datetime,
+    source_name: str,
+    source_url: str,
+) -> list[RawItem]:
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if script is None or not script.string:
+        return []
+    try:
+        payload = json.loads(script.string)
+    except Exception:
+        return []
+    page_props = payload.get("props", {}).get("pageProps", {})
+    posts = page_props.get("posts") or []
+    out: list[RawItem] = []
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        post_id = str(post.get("id") or "").strip()
+        text = str(post.get("content") or "").strip()
+        if not post_id or not text:
+            continue
+        published = parse_date_any(post.get("createdAt") or post.get("actionTime"), now)
+        if not published:
+            continue
+        out.append(
+            RawItem(
+                site_id="opmlrss",
+                site_name="OPML RSS",
+                source=source_name,
+                title=compact_title(text),
+                url=f"https://m.okjike.com/originalPosts/{post_id}",
+                published_at=published,
+                meta={"bridge_type": "jike", "feed_home": source_url},
+            )
+        )
+    return out
+
+
 def fetch_opml_rss(
     now: datetime,
     opml_path: Path,
@@ -1947,6 +2086,16 @@ def fetch_opml_rss(
 
     for feed in feeds:
         original_url = feed["xml_url"]
+        bridge = resolve_opml_bridge_source(original_url, feed.get("html_url") or "")
+        if bridge:
+            record = dict(feed)
+            record["xml_url_original"] = original_url
+            record["xml_url"] = bridge["url"]
+            record["replaced"] = True
+            record.update(bridge)
+            resolved_feeds.append(record)
+            continue
+
         resolved_url, skip_reason = resolve_official_rss_url(original_url)
         if not resolved_url:
             feed_id = hashlib.sha1(original_url.encode("utf-8")).hexdigest()[:10]
@@ -1993,7 +2142,22 @@ def fetch_opml_rss(
             )
             resp.raise_for_status()
 
-            if feedparser is not None:
+            bridge_type = str(feed.get("bridge_type") or "")
+            if bridge_type == "telegram":
+                local_items = parse_telegram_public_items(
+                    resp.text,
+                    now=now,
+                    source_name=feed_title,
+                    slug=str(feed.get("bridge_slug") or ""),
+                )
+            elif bridge_type == "jike":
+                local_items = parse_jike_public_items(
+                    resp.text,
+                    now=now,
+                    source_name=feed_title,
+                    source_url=feed_url,
+                )
+            elif feedparser is not None:
                 parsed = feedparser.parse(resp.content)
                 source_name = first_non_empty(
                     feed_title,
@@ -2065,6 +2229,7 @@ def fetch_opml_rss(
             "skipped": False,
             "skip_reason": None,
             "replaced": bool(original_feed_url != feed_url),
+            "bridge_type": feed.get("bridge_type"),
         }
         return local_items, status
 
@@ -2644,45 +2809,9 @@ def normalize_source_for_display(site_id: str, source: str, url: str) -> str:
 
 
 def is_ai_related_record(record: dict[str, Any]) -> bool:
-    site_id = str(record.get("site_id") or "")
-    title = str(record.get("title") or "")
-    source = str(record.get("source") or "")
-    site_name = str(record.get("site_name") or "")
-    url = str(record.get("url") or "")
-    text = f"{title} {source} {site_name} {url}".lower()
-
-    # zeli 按需求只保留 Hacker News 24h 最热。
-    if site_id == "zeli":
-        return "24h" in source.lower() or "24h最热" in source
-
-    if site_id == "tophub":
-        source_l = source.lower()
-        if has_mojibake_noise(source) or has_mojibake_noise(title):
-            return False
-        if contains_any_keyword(source_l, TOPHUB_BLOCK_KEYWORDS):
-            return False
-        if not contains_any_keyword(source_l, TOPHUB_ALLOW_KEYWORDS):
-            return False
-
-    # AI/热点聚合站默认保留，避免误杀。
-    if site_id in {"aibase", "aihot", "aihubtoday"}:
-        return True
-
-    has_ai = contains_meaningful_ai_signal(text)
-    has_broad_ai = contains_any_keyword(text, list(BROAD_AI_TERMS)) or EN_SIGNAL_RE.search(text) is not None
-    has_tech = contains_any_keyword(text, TECH_KEYWORDS)
-
-    if not (has_ai or (has_broad_ai and has_tech)):
+    if has_mojibake_noise(str(record.get("source") or "")) or has_mojibake_noise(str(record.get("title") or "")):
         return False
-
-    if contains_any_keyword(text, COMMERCE_NOISE_KEYWORDS) and not has_ai:
-        return False
-
-    # 如果是明显噪声且没有明确 AI 信号，则丢弃。
-    if contains_any_keyword(text, NOISE_KEYWORDS) and not has_ai:
-        return False
-
-    return True
+    return bool(score_ai_relevance(record)["is_ai_related"])
 
 
 def load_title_zh_cache(path: Path) -> dict[str, str]:
@@ -2822,6 +2951,7 @@ def build_latest_payloads(latest_payload: dict[str, Any]) -> tuple[dict[str, Any
         "generated_at": latest_payload.get("generated_at"),
         "window_hours": latest_payload.get("window_hours"),
         "topic_filter": latest_payload.get("topic_filter"),
+        "ai_relevance_threshold": latest_payload.get("ai_relevance_threshold"),
         "total_items_raw": latest_payload.get("total_items_raw"),
         "total_items_all_mode": latest_payload.get("total_items_all_mode"),
         "items_all": latest_payload.get("items_all", []),
@@ -2978,12 +3108,13 @@ def main() -> int:
                 str(normalized.get("title") or "")
             ):
                 continue
+            normalized = add_ai_relevance_fields(normalized)
             latest_items_all.append(normalized)
 
     latest_items_all = normalize_aihubtoday_records(latest_items_all)
 
     latest_items_all.sort(key=lambda x: event_time(x) or datetime.min.replace(tzinfo=UTC), reverse=True)
-    latest_items = [record for record in latest_items_all if is_ai_related_record(record)]
+    latest_items = [record for record in latest_items_all if record.get("ai_is_related", is_ai_related_record(record))]
     title_cache = load_title_zh_cache(title_cache_path)
     latest_items, latest_items_all, title_cache = add_bilingual_fields(
         latest_items,
@@ -3038,7 +3169,8 @@ def main() -> int:
         "total_items_ai_raw": len(latest_items),
         "total_items_raw": len(latest_items_all),
         "total_items_all_mode": len(latest_items_all_dedup),
-        "topic_filter": "ai_tech_robotics",
+        "topic_filter": "ai_relevance_scoring_v0_4",
+        "ai_relevance_threshold": 0.65,
         "archive_total": len(archive),
         "site_count": len(site_stat),
         "source_count": len({f"{i['site_id']}::{i['source']}" for i in latest_items_ai_dedup}),
